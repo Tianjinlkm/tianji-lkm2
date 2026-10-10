@@ -7,7 +7,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
       - run: git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
-      - run: mkdir -p kernel-src/drivers/misc/hwid && touch kernel-src/drivers/misc/hwid/Kconfig && cd kernel-src && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+      - run: |
+          cd kernel-src
+          grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | while read f; do
+            mkdir -p "$(dirname "$f")"
+            touch "$f"
+          done
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
       - run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - uses: actions/upload-artifact@v4
         with:
