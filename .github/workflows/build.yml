@@ -9,7 +9,7 @@ jobs:
       - run: git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
       - run: |
           cd kernel-src
-          grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | while read f; do
+          grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | grep -v '^$' | while read f; do
             mkdir -p "$(dirname "$f")"
             touch "$f"
           done
