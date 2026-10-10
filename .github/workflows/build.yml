@@ -1,30 +1,15 @@
-name: Build TianjiLKM
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
+name: Build
+on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
-      - name: Clone kernel
-        run: git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
-      - name: Build kernel
-        run: |
-          cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
-      - name: Build module
-        run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
-      - name: Upload ko
-        uses: actions/upload-artifact@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
+      - run: git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
+      - run: cd kernel-src && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+      - run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
+      - uses: actions/upload-artifact@v4
         with:
-          name: tianji-lkm-ko
+          name: ko
           path: *.ko
