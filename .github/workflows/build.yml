@@ -26,20 +26,15 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+      - name: Disable dtc build entirely
+        run: |
+          cd kernel-src
+          echo "all:" > scripts/dtc/Makefile
+          echo "clean:" >> scripts/dtc/Makefile
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -k modules_prepare -j$(nproc) || true
-          mkdir -p arch/arm64/include/generated
-          touch arch/arm64/include/generated/cpucaps.h
-          touch arch/arm64/include/generated/asm-offsets.h
-          mkdir -p arch/arm64/include/generated/uapi/asm
-          for f in errno.h ioctl.h ioctls.h ipcbuf.h termbits.h termios.h; do
-            touch arch/arm64/include/generated/uapi/asm/$f
-          done
-          mkdir -p include/generated
-          echo '#define UTS_RELEASE "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284"' > include/generated/utsrelease.h
-          touch include/generated/compile.h
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
