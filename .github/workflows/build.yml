@@ -26,15 +26,16 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-      - name: Disable dtc build entirely
+      - name: Neutralize dtc build
         run: |
           cd kernel-src
-          echo "all:" > scripts/dtc/Makefile
-          echo "clean:" >> scripts/dtc/Makefile
+          echo "# nothing" > scripts/dtc/Makefile
+          touch scripts/dtc/dtc
+          chmod +x scripts/dtc/dtc
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
