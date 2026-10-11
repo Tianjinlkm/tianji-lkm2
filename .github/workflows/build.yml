@@ -26,10 +26,17 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+      - name: Fake dtc as already built
+        run: |
+          cd kernel-src
+          sudo touch scripts/dtc/dtc
+          sudo chmod +x scripts/dtc/dtc
+          find scripts/dtc -name "*.c" -exec sudo touch -t 202001010000 {} \;
+          find scripts/dtc -name "*.o" -exec sudo touch -t 202001010000 {} \;
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -k modules_prepare -j$(nproc) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
