@@ -29,7 +29,27 @@ jobs:
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
           cd kernel-src && git log --oneline -1
 
-      - name: dtc 修复（容错版：文件不存在也绝不中断）
+      - name: Fix missing Kconfig files (全树扫描，只补缺失)
+        run: |
+          cd kernel-src
+          # Xiaomi OSS 分支常删掉闭源驱动目录（如 drivers/misc/hwid），
+          # 但父 Kconfig 仍保留 source "..." 行 -> olddefconfig 报 "can't open file" 并退出。
+          # 扫描全树，为所有缺失的 source 目标创建空 Kconfig。
+          # touch 对已存在文件只改时间戳、不破坏内容，所以是安全的。
+          grep -rh "source \"" --include="Kconfig*" . 2>/dev/null \
+            | sed 's/.*source "//;s/".*//' \
+            | grep -v '^$' | grep -v '\$' | sort -u \
+            | while read -r f; do
+                if [ ! -e "$f" ]; then
+                  mkdir -p "$(dirname "$f")"
+                  touch "$f"
+                  echo "补全缺失 Kconfig: $f"
+                fi
+              done
+          echo "====== 关键点自检 ======"
+          ls -l drivers/misc/hwid/Kconfig 2>/dev/null || echo "(hwid/Kconfig 仍缺失!)"
+
+      - name: dtc 修复（容错：文件不存在也绝不中断）
         run: |
           cd kernel-src
           echo "====== scripts/dtc 实际内容 ======"
@@ -39,7 +59,6 @@ jobs:
 
           # GCC>=10 默认 -fno-common。5.10 的 dtc 在新版 flex/bison 下
           # lexer 与 parser 各有一份 YYLTYPE yylloc -> multiple definition -> 链接失败
-          # 1) 删掉重复的 yylloc 定义（只对存在的文件动手）
           for f in scripts/dtc/dtc-lexer.l \
                    scripts/dtc/dtc-lexer.lex.c_shipped \
                    scripts/dtc/dtc-lexer.lex.c ; do
@@ -51,67 +70,68 @@ jobs:
             fi
           done
 
-          # 2) 兜底：所有 host 程序统一 -fcommon，直接化解 yylloc 重复定义
+          # 兜底：所有 host 程序统一 -fcommon
           printf '\nHOSTCFLAGS += -fcommon\nKBUILD_HOSTCFLAGS += -fcommon\nHOST_EXTRACFLAGS += -fcommon\n' >> Makefile
 
-      - name: Prepare .config
+      - name: 定位并准备 .config（多级兜底）
         run: |
           cd kernel-src
-          gunzip -c "$GITHUB_WORKSPACE/.config" > .config
-          sed -i '/^CONFIG_CC_IS_CLANG=/d; /^CONFIG_CC_VERSION_TEXT=/d' .config
-          scripts/config --disable GCC_PLUGINS
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          echo "====== 关键开关 ======"
-          grep -E 'CONFIG_MODVERSIONS=|CONFIG_LOCALVERSION=|CONFIG_CC_IS_' .config || true
+          echo "====== 工作区根目录 ======"
+          ls -la "$GITHUB_WORKSPACE"
 
-      - name: modules_prepare（带 dtc 终极兜底）
-        run: |
-          cd kernel-src
-          if ! make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- V=1 modules_prepare > /tmp/prep.log 2>&1; then
-            echo "====== modules_prepare 失败，打印真实错误 ======"
-            tail -60 /tmp/prep.log
-            echo "====== 启用 dtc 兜底：替换为可编译的 stub ======"
-            if [ -d scripts/dtc ]; then
-              for f in scripts/dtc/*.c; do
-                [ -e "$f" ] || continue
-                [ "$(basename "$f")" = "dtc.c" ] && continue
-                printf '/* stub */\n' > "$f"
-              done
-              printf 'int main(int argc, char **argv){(void)argc;(void)argv;return 0;}\n' > scripts/dtc/dtc.c
-            fi
-            make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          else
-            echo "====== modules_prepare 一次通过 ======"
-          fi
-
-      - name: 自检产物
-        run: |
-          cd kernel-src
-          ls -l arch/arm64/include/generated/asm/errno.h \
-                arch/arm64/include/generated/uapi/asm/errno.h \
-                arch/arm64/include/generated/asm/cpucaps.h \
-                include/generated/autoconf.h \
-                include/generated/bounds.h \
-                include/generated/utsrelease.h \
-                arch/arm64/include/generated/asm-offsets.h \
-                scripts/module.lds
-          echo "====== Module.symvers ======"
-          ls -l Module.symvers 2>/dev/null || echo "(无 Module.symvers，CONFIG_MODVERSIONS 可能未开)"
-
-      - name: Build module
-        run: |
-          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-               -C "$GITHUB_WORKSPACE/kernel-src" M="$GITHUB_WORKSPACE" modules
-
-      - name: Show module info
-        run: |
-          for ko in ./*.ko; do
-            echo "== $ko =="
-            aarch64-linux-gnu-readelf -p .modinfo "$ko" | head -20
+          CFG=""
+          for p in "$GITHUB_WORKSPACE/.config" \
+                   "$GITHUB_WORKSPACE/config" \
+                   "$GITHUB_WORKSPACE/config.gz" \
+                   "$GITHUB_WORKSPACE/.config.gz" \
+                   "$GITHUB_WORKSPACE/config_device" \
+                   "$GITHUB_WORKSPACE/config_device.h" ; do
+            if [ -f "$p" ]; then CFG="$p"; break; fi
           done
 
-      - name: Upload ko
-        uses: actions/upload-artifact@v4
-        with:
-          name: tianji-lkm-ko
-          path: '*.ko'
+          if [ -n "$CFG" ]; then
+            echo "候选 config 文件: $CFG"
+            # 用魔数判断是否 gzip（1f 8b）
+            if head -c2 "$CFG" | od -An -tx1 | grep -q '1f 8b'; then
+              echo "检测到 gzip，解压"
+              gunzip -c "$CFG" > .config
+            else
+              echo "纯文本，直接复制"
+              cp "$CFG" .config
+            fi
+
+            # 若不是 kconfig 格式（例如 #define CONFIG_X 1），做转换
+            if ! grep -q '^CONFIG_[A-Za-z0-9_]*=[ym]' .config; then
+              echo "====== 非 kconfig 格式，#define -> CONFIG_X=... 转换 ======"
+              awk '/^[[:space:]]*#define[[:space:]]+CONFIG_/ {
+                     sub(/^[[:space:]]*#define[[:space:]]+/, "");
+                     if ($0 ~ /[ \t]/) sub(/[ \t]+/, "="); else $0 = $0 "=y";
+                     print
+                   }' "$CFG" > .config.kcfg
+              grep '^CONFIG_' .config.kcfg > .config
+              rm -f .config.kcfg
+            fi
+
+            LINES=$(wc -l < .config)
+            echo "转换后 .config 行数: $LINES"
+            if [ "$LINES" -lt 50 ]; then
+              echo "!! config 内容过少（视为无效），改用源码自带 defconfig"
+              CFG=""
+            elif [ "$LINES" -lt 2000 ]; then
+              echo "警告: .config 仅 $LINES 行，可能只是片段而非完整设备配置"
+            fi
+          fi
+
+          if [ -z "$CFG" ]; then
+            echo "====== 无可用 config，回退源码自带 defconfig ======"
+            ls arch/arm64/configs/ 2>/dev/null | head -40
+            ls arch/arm64/configs/vendor/ 2>/dev/null | head -40
+            DEF=$(ls arch/arm64/configs/ arch/arm64/configs/vendor/ 2>/dev/null \
+                  | grep -iE 'zircon|pearl|mt6896' | head -1)
+            if [ -n "$DEF" ]; then
+              echo "选用 defconfig: $DEF"
+              cp "arch/arm64/configs/$DEF" .config 2>/dev/null \
+                || cp "arch/arm64/configs/vendor/$DEF" .config
+            else
+              echo "无匹配 defconfig，使用默认 defconfig"
+              make A
