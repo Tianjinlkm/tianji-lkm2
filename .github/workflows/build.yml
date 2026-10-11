@@ -22,21 +22,42 @@ jobs:
             libssl-dev libelf-dev \
             python3 python-is-python3 cpio kmod xz-utils
 
-      # 自动定位 build.sh：根目录优先，找不到就去 .github/workflows/ 里找
+      # 先体检脚本：不完整就立刻说清楚，不让它跑一半抛莫名错误
+      - name: 检查 build.sh 完整性
+        run: |
+          for p in "$GITHUB_WORKSPACE/build.sh" \
+                   "$GITHUB_WORKSPACE/.github/workflows/build.sh"; do
+            if [ -f "$p" ]; then S="$p"; break; fi
+          done
+          if [ -z "${S:-}" ]; then
+            echo "!! 没找到 build.sh"
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -name '*.sh' | head
+            exit 1
+          fi
+          echo "路径: $S"
+          echo "行数: $(wc -l < "$S")  字节: $(wc -c < "$S")"
+          echo "首行: $(head -1 "$S")"
+          echo "末行: $(tail -1 "$S")"
+          if ! tail -1 "$S" | grep -q 'BUILD-SH-END-MARKER'; then
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            echo "!! build.sh 不完整 —— 上传时被截断了"
+            echo "!! 正确版本共 69 行、6115 字节，末行是 # BUILD-SH-END-MARKER"
+            echo "!! 请用 Add file -> Upload files 重传，不要用粘贴"
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            exit 1
+          fi
+          if ! bash -n "$S"; then
+            echo "!! 语法检查未通过"
+            exit 1
+          fi
+          echo "==> 脚本完整且语法正确"
+
       - name: Build
         run: |
           for p in "$GITHUB_WORKSPACE/build.sh" \
-                   "$GITHUB_WORKSPACE/.github/workflows/build.sh" \
-                   "$GITHUB_WORKSPACE/scripts/build.sh"; do
-            if [ -f "$p" ]; then
-              echo "找到脚本: $p"
-              bash "$p"
-              exit 0
-            fi
+                   "$GITHUB_WORKSPACE/.github/workflows/build.sh"; do
+            if [ -f "$p" ]; then bash "$p"; exit 0; fi
           done
-          echo "!! 没找到 build.sh，当前仓库结构如下："
-          find "$GITHUB_WORKSPACE" -maxdepth 3 -name '*.sh' -o -maxdepth 3 -name '*.yml' | head -20
-          exit 1
 
       - name: Upload ko
         uses: actions/upload-artifact@v4
