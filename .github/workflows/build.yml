@@ -17,7 +17,7 @@ jobs:
 
       - name: Unpack real .config from phone
         run: |
-          gunzip -c config > kernel-src/.config
+          gunzip -c .config > kernel-src/.config
           cd kernel-src
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
