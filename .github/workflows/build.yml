@@ -8,7 +8,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev device-tree-compiler
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev device-tree-compiler
       - name: Clone kernel source
         run: |
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
@@ -26,7 +26,7 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-      - name: Replace dtc with system binary
+      - name: Replace dtc with real system binary
         run: |
           cd kernel-src
           sudo cp /usr/bin/dtc scripts/dtc/dtc
