@@ -87,59 +87,50 @@ echo "KERNELRELEASE = $GOT"
 echo "目标          = $TGT"
 if [ "$GOT" = "$TGT" ]; then echo "==> 版本一致"; else echo "==> 版本不一致!"; fi
 
-log "7. modules_prepare"
-if ! $MAKE modules_prepare > /tmp/prep1.log 2>&1; then
-  echo "--- 失败，真实错误 ---"
-  tail -60 /tmp/prep1.log
-  echo "--- 禁用 dtc 后重试 ---"
+log "7. modules_prepare（四级降级）"
+
+show_err() {                      # 打印日志里真正的报错行
+  echo "----- 日志最后 40 行 -----"
+  tail -40 "$1"
+  echo "----- 含 error / Error / No such file 的行 -----"
+  grep -n -iE 'error|no such file|not found|cannot find|missing' "$1" | head -30
+}
+
+disable_dtc() {
+  echo ">>> 禁用 dtc 构建"
   if [ -f scripts/dtc/Makefile ]; then
     sed -i -E 's@^([[:space:]]*)(hostprogs-[A-Za-z0-9_$()$-]*|always|subdir-[A-Za-z0-9_$()$-]*)[[:space:]]*(:=|\+=)@\1# DISABLED-DTC \2 \3@' scripts/dtc/Makefile
-    cat scripts/dtc/Makefile
   fi
   find scripts/dtc -name '*.o' -delete 2>/dev/null
-  if ! $MAKE modules_prepare > /tmp/prep2.log 2>&1; then
-    echo "!! modules_prepare 彻底失败"
-    tail -80 /tmp/prep2.log
-    exit 1
-  fi
-fi
+  return 0
+}
 
-log "8. 产物自检"
-for f in include/config/auto.conf include/config/kernel.release \
-         include/generated/autoconf.h include/generated/utsrelease.h \
-         arch/arm64/include/generated/asm/errno.h \
-         arch/arm64/include/generated/asm-offsets.h; do
-  if [ -e "$f" ]; then echo "OK      : $f"; else echo "MISSING : $f"; fi
-done
-echo "--- kernel.release ---"
-cat include/config/kernel.release 2>/dev/null
+# headers_install 只导出 usr/include（给 glibc 用的 libc 头文件），
+# 编外部 .ko 完全不需要。OSS 树常因为删了闭源头文件在这里炸。
+disable_hdrinst() {
+  echo ">>> 把 headers_install / headers 变成空目标"
+  # 两个都屏蔽：不同内核版本走的入口不一样
+  printf '\n# 云编译外部模块：跳过 usr/include 导出（对 .ko 无用）\nheaders_install:\n\t@true\nheaders_install_all:\n\t@true\nheaders:\n\t@true\n' >> Makefile
+  return 0
+}
 
-log "9. 编译模块"
-echo "--- 模块目录 ---"
-ls -la "$WS"
-echo "--- 模块 Makefile ---"
-cat "$WS/Makefile" 2>/dev/null || echo "(根目录没有 Makefile)"
-make -j"$(nproc)" KBUILD_MODPOST_WARN=1 -C "$SRC" M="$WS" modules 2>&1 | tail -60
+# 兜底：手工逐个生成编 .ko 真正需要的东西，绕开整个 prepare 链
+manual_prepare() {
+  echo ">>> 手工分步生成"
+  # 这些在 5.10 里都是可直接调用的真实目标
+  $MAKE include/config/kernel.release    || true
+  $MAKE include/generated/utsrelease.h   || true
+  $MAKE include/generated/autoconf.h     || true
+  $MAKE include/generated/compile.h      || true
+  $MAKE include/generated/bounds.h       || true
+  $MAKE archprepare                      || true   # 含 archheaders/scripts/asm-generic
+  $MAKE arch/arm64/include/generated/asm-offsets.h || true
+  $MAKE scripts/module.lds               || true
+  $MAKE prepare                          || true
+  $MAKE modules_prepare                  || true
+  return 0
+}
 
-log "10. 收集 .ko"
-mkdir -p "$WS/out"
-find "$WS" -maxdepth 2 -name '*.ko' -type f > /tmp/kos.txt
-if [ ! -s /tmp/kos.txt ]; then
-  find "$WS" -name '*.ko' -type f 2>/dev/null | grep -v '/kernel-src/' > /tmp/kos.txt
-fi
-while read -r ko; do
-  cp -f "$ko" "$WS/out/" && echo "收集: $ko"
-done < /tmp/kos.txt
-echo "--- out/ ---"
-ls -la "$WS/out/"
-
-log "11. vermagic 核对"
-for ko in "$WS"/out/*.ko; do
-  if [ ! -e "$ko" ]; then echo "!! 没有生成任何 .ko"; break; fi
-  echo "== $ko =="
-  readelf -p .modinfo "$ko" | head -20
-done
-
-echo
-echo "==================== 脚本执行完毕 ===================="
-exit 0
+if $MAKE modules_prepare > /tmp/prep1.log 2>&1; then
+  echo "==> 第1次：直接通过"
+elif disable_dtc && $MAKE modules_prepare 
