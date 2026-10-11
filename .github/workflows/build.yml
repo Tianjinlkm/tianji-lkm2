@@ -5,46 +5,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev
-
-      - name: Clone pearl kernel source
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
+      - name: Clone kernel source
         run: |
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
-
-      - name: Create missing Kconfig files
+      - name: Fix missing Kconfig files
         run: |
           cd kernel-src
           grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | grep -v '^$' | while read f; do
             mkdir -p "$(dirname "$f")"
             touch "$f"
           done
-
-      - name: Unpack real .config from phone
+      - name: Setup .config
         run: |
           gunzip -c .config > kernel-src/.config
-          cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-
-      - name: Remove dtc build entirely
+          cd kernel-src && make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+      - name: Create generated headers
         run: |
           cd kernel-src
-          sudo rm -f scripts/dtc/Makefile
-          sudo touch scripts/dtc/dtc
-
-      - name: Prepare kernel build env
-        run: |
-          cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
-          ls -la include/generated/asm-offsets.h include/generated/autoconf.h include/generated/utsrelease.h
-
-      - name: Build TianjiLKM
-        run: |
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
-
+          mkdir -p include/generated
+          echo '#define UTS_RELEASE "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284"' > include/generated/utsrelease.h
+          touch include/generated/compile.h
+          touch include/generated/asm-offsets.h
+      - name: Disable stack protector
+        run: echo 'ccflags-y += -fno-stack-protector' >> Makefile
+      - name: Build module
+        run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
         uses: actions/upload-artifact@v4
         with:
