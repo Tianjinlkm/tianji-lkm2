@@ -1,22 +1,37 @@
-name: Build
+name: Build TianjiLKM
 on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
-      - run: git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
-      - run: |
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
+
+      - name: Clone pearl kernel source
+        run: |
+          git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
+
+      - name: Unpack real .config from phone
+        run: |
+          gunzip -c config > kernel-src/.config
           cd kernel-src
-          grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | grep -v '^$' | while read f; do
-            mkdir -p "$(dirname "$f")"
-            touch "$f"
-          done
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
-      - run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
-      - uses: actions/upload-artifact@v4
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Prepare kernel build env
+        run: |
+          cd kernel-src
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
+
+      - name: Build TianjiLKM
+        run: |
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
+
+      - name: Upload ko
+        uses: actions/upload-artifact@v4
         with:
-          name: ko
+          name: tianji-lkm-ko
           path: '*.ko'
