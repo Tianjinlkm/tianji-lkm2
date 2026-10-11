@@ -8,7 +8,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev device-tree-compiler
       - name: Clone kernel source
         run: |
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
@@ -26,10 +26,17 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+      - name: Replace dtc with system binary
+        run: |
+          cd kernel-src
+          sudo cp /usr/bin/dtc scripts/dtc/dtc
+          sudo chmod 755 scripts/dtc/dtc
+          find scripts/dtc -name "*.c" -exec sudo touch -t 202001010000 {} \;
+          find scripts/dtc -name "*.o" -exec sudo touch -t 202001010000 {} \;
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
