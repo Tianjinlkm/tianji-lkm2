@@ -1,109 +1,82 @@
 name: Build TianjiLKM
-on: [push]
+
+on:
+  push:
+  workflow_dispatch:
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Install toolchain
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain and deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            make bc bison flex \
+            libssl-dev libelf-dev \
+            python3 python-is-python3 cpio kmod xz-utils
+          aarch64-linux-gnu-gcc --version | head -1
+
       - name: Clone kernel source
         run: |
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
-      - name: Fix missing Kconfig files
+          cd kernel-src && git log --oneline -1
+
+      - name: Fix dtc link failure on modern GCC
         run: |
           cd kernel-src
-          grep -rh "source \"" drivers/ | sed 's/.*source "//;s/".*//' | grep -v '^$' | while read f; do
-            mkdir -p "$(dirname "$f")"
-            touch "$f"
-          done
-      - name: Setup .config and disable stack protector
+          # GCC>=10 默认 -fno-common。5.10 的 dtc 用新版 flex/bison 重新生成后，
+          # dtc-lexer.l 与 bison 生成的 parser 各有一份 YYLTYPE yylloc，
+          # 链接时报 multiple definition of 'yylloc' -> modules_prepare 中断。
+          sed -i '/^YYLTYPE yylloc;$/d' scripts/dtc/dtc-lexer.l
+          sed -i '/^YYLTYPE yylloc;$/d' scripts/dtc/dtc-lexer.lex.c_shipped
+          # 兜底：宿主程序统一加 -fcommon
+          printf '\nHOSTCFLAGS += -fcommon\nKBUILD_HOSTCFLAGS += -fcommon\nHOST_EXTRACFLAGS += -fcommon\n' >> Makefile
+
+      - name: Prepare .config
         run: |
-          gunzip -c .config > kernel-src/.config
           cd kernel-src
-          sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
-          sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
+          # 仓库根目录放的是 /proc/config.gz 抓下来的 gzip 文件
+          gunzip -c "$GITHUB_WORKSPACE/.config" > .config
+          # 这两个是编译时由工具链推导的，设备 config 里带过来会污染 kbuild
+          sed -i '/^CONFIG_CC_IS_CLANG=/d; /^CONFIG_CC_VERSION_TEXT=/d' .config
+          # 关掉宿主要编 gcc 插件的开关，避免 host 侧再炸一次
+          scripts/config --disable GCC_PLUGINS
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-      - name: Auto-create ALL generated headers
+          echo "====== vermagic / modversions 相关 ======"
+          grep -E 'CONFIG_MODVERSIONS=|CONFIG_MODULE_UNLOAD=|CONFIG_LOCALVERSION=|CONFIG_PREEMPT=|CONFIG_SMP=' .config || true
+
+      - name: modules_prepare (生成全部 generated 头文件)
         run: |
           cd kernel-src
-          
-          # Create ALL directories first
-          mkdir -p arch/arm64/include/generated/uapi/asm
-          mkdir -p arch/arm64/include/generated/asm
-          mkdir -p arch/arm64/include/uapi/asm
-          mkdir -p include/generated
-          
-          # 1. Symlink everything from asm-generic to uapi/asm
-          for f in include/uapi/asm-generic/*.h; do
-            name=$(basename "$f")
-            ln -sf "../../../../$f" "arch/arm64/include/generated/uapi/asm/$name"
-          done
-          
-          for f in include/uapi/asm-generic/*.h; do
-            name=$(basename "$f")
-            if [ ! -f "arch/arm64/include/uapi/asm/$name" ]; then
-              ln -sf "../../../../$f" "arch/arm64/include/uapi/asm/$name"
-            fi
-          done
-          
-          # 2. Create cpucaps.h with all macros
-          cat > arch/arm64/include/generated/cpucaps.h << 'EOF'
-          #ifndef __ASM_CPUCAPS_H
-          #define __ASM_CPUCAPS_H
-          #define ARM64_HAS_CACHE_IDC		0
-          #define ARM64_HAS_CACHE_HW30		1
-          #define ARM64_WORKAROUND_CLEAN_CACHE	2
-          #define ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE	3
-          #define ARM64_WORKAROUND_834220		4
-          #define ARM64_WORKAROUND_843419		5
-          #define ARM64_WORKAROUND_1165522		6
-          #define ARM64_SPECTRE_V2			7
-          #define ARM64_SPECTRE_V3A			8
-          #define ARM64_SPECTRE_V4			9
-          #define ARM64_MISMATCHED_CACHE_TYPE		10
-          #define ARM64_SSB				11
-          #define ARM64_SSBD				12
-          #define ARM64_MPAM				13
-          #define ARM64_KVM_PROTECTED_MODE		14
-          #define ARM64_E0PD				15
-          #define ARM64_PTR_AUTH			16
-          #define ARM64_MTE				17
-          #define ARM64_BTI				18
-          #define ARM64_GCS				19
-          #define ARM64_RAS_EXTN			20
-          #define ARM64_NV				21
-          #define ARM64_MTE_ASYNC			22
-          #define ARM64_EPAN				23
-          #define ARM64_SVE				24
-          #define ARM64_SME				25
-          #define ARM64_SME2				26
-          #define ARM64_POE				27
-          #define ARM64_CNTVCTSSCT			28
-          #define ARM64_CNP				29
-          #define ARM64_TLB_RANGE			30
-          #define ARM64_HAS_RNG			31
-          #define ARM64_WORKAROUND_TSB			32
-          #define ARM64_WORKAROUND_SPECULATIVE_SSBS	33
-          #define ARM64_WORKAROUND_BHB			34
-          #define ARM64_NCAPS			35
-          #endif
-          EOF
-          
-          # Put cpucaps.h in all locations
-          cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/generated/asm/cpucaps.h
-          cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/asm/cpucaps.h
-          
-          # 3. Create other common generated headers
-          touch include/generated/bounds.h
-          touch include/generated/utsrelease.h
-          touch include/generated/compile.h
-          touch include/generated/autoksyms.h
-          touch arch/arm64/include/generated/asm-offsets.h
+          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
+          echo "====== 自检：关键产物是否齐全 ======"
+          ls -l arch/arm64/include/generated/asm/errno.h \
+                arch/arm64/include/generated/uapi/asm/errno.h \
+                arch/arm64/include/generated/asm/cpucaps.h \
+                include/generated/autoconf.h \
+                include/generated/bounds.h \
+                include/generated/utsrelease.h \
+                arch/arm64/include/generated/asm-offsets.h \
+                scripts/module.lds
+
       - name: Build module
-        run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
+        run: |
+          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+               -C "$GITHUB_WORKSPACE/kernel-src" M="$GITHUB_WORKSPACE" modules
+
+      - name: Show module info
+        run: |
+          for ko in ./*.ko; do
+            echo "== $ko =="
+            aarch64-linux-gnu-readelf -p .modinfo "$ko" | head -20
+          done
+
       - name: Upload ko
         uses: actions/upload-artifact@v4
         with:
