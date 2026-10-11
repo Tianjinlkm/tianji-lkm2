@@ -22,8 +22,21 @@ jobs:
             libssl-dev libelf-dev \
             python3 python-is-python3 cpio kmod xz-utils
 
+      # 自动定位 build.sh：根目录优先，找不到就去 .github/workflows/ 里找
       - name: Build
-        run: bash "$GITHUB_WORKSPACE/build.sh"
+        run: |
+          for p in "$GITHUB_WORKSPACE/build.sh" \
+                   "$GITHUB_WORKSPACE/.github/workflows/build.sh" \
+                   "$GITHUB_WORKSPACE/scripts/build.sh"; do
+            if [ -f "$p" ]; then
+              echo "找到脚本: $p"
+              bash "$p"
+              exit 0
+            fi
+          done
+          echo "!! 没找到 build.sh，当前仓库结构如下："
+          find "$GITHUB_WORKSPACE" -maxdepth 3 -name '*.sh' -o -maxdepth 3 -name '*.yml' | head -20
+          exit 1
 
       - name: Upload ko
         uses: actions/upload-artifact@v4
