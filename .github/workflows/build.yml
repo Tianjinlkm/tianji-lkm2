@@ -30,15 +30,18 @@ jobs:
         run: |
           cd kernel-src
           
-          # 1. Create uapi/asm directory, symlink everything from asm-generic
+          # Create ALL directories first
           mkdir -p arch/arm64/include/generated/uapi/asm
+          mkdir -p arch/arm64/include/generated/asm
+          mkdir -p arch/arm64/include/uapi/asm
+          mkdir -p include/generated
+          
+          # 1. Symlink everything from asm-generic to uapi/asm
           for f in include/uapi/asm-generic/*.h; do
             name=$(basename "$f")
             ln -sf "../../../../$f" "arch/arm64/include/generated/uapi/asm/$name"
           done
           
-          # 2. Also create in arch/arm64/include/uapi/asm/ just in case
-          mkdir -p arch/arm64/include/uapi/asm
           for f in include/uapi/asm-generic/*.h; do
             name=$(basename "$f")
             if [ ! -f "arch/arm64/include/uapi/asm/$name" ]; then
@@ -46,7 +49,7 @@ jobs:
             fi
           done
           
-          # 3. Create cpucaps.h with all macros
+          # 2. Create cpucaps.h with all macros
           cat > arch/arm64/include/generated/cpucaps.h << 'EOF'
           #ifndef __ASM_CPUCAPS_H
           #define __ASM_CPUCAPS_H
@@ -93,7 +96,7 @@ jobs:
           cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/generated/asm/cpucaps.h
           cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/asm/cpucaps.h
           
-          # 4. Create other common generated headers
+          # 3. Create other common generated headers
           touch include/generated/bounds.h
           touch include/generated/utsrelease.h
           touch include/generated/compile.h
