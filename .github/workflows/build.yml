@@ -26,6 +26,11 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+      - name: Generate arch headers
+        run: |
+          cd kernel-src
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare0 -j$(nproc) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- archprepare -j$(nproc) || true
       - name: Create generated headers
         run: |
           cd kernel-src
