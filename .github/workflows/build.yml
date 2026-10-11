@@ -26,20 +26,11 @@ jobs:
           git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
           cd kernel-src && git log --oneline -1
 
-      # ---------------------------------------------------------------
-      # 以下两步的 shell 逻辑用 heredoc 写成独立脚本文件再执行。
-      # 好处：1) 不受 YAML 缩进/引号改写影响  2) 执行前先 bash -n 自检，
-      #       语法有问题会立刻指出行号，而不是报莫名的 "unexpected EOF"。
-      # ---------------------------------------------------------------
-
       - name: Fix missing Kconfig files
         run: |
           cat > /tmp/fix_kconfig.sh <<'EOS'
           set -x
           cd "$1/kernel-src"
-          # OSS 分支删掉了闭源驱动目录(如 drivers/misc/hwid)，
-          # 但父 Kconfig 仍保留 source "drivers/misc/hwid/Kconfig"
-          # -> olddefconfig 报 can't open file 并退出。这里补空文件。
           grep -rh "source \"" --include="Kconfig*" . 2>/dev/null \
             | sed 's/.*source "//; s/".*//' \
             | grep -v '^$' | grep -v '\$' | sort -u > /tmp/srcs.txt
@@ -51,8 +42,6 @@ jobs:
               echo "补全: $f"
             fi
           done < /tmp/srcs.txt
-          echo "--- 自检 ---"
-          ls -l drivers/misc/hwid/Kconfig 2>/dev/null || echo "(hwid/Kconfig 不存在或无需它)"
           EOS
           bash -n /tmp/fix_kconfig.sh
           bash /tmp/fix_kconfig.sh "$GITHUB_WORKSPACE"
@@ -62,19 +51,11 @@ jobs:
           cat > /tmp/fix_dtc.sh <<'EOS'
           set -x
           cd "$1/kernel-src"
-          ls -l scripts/dtc/ 2>/dev/null || echo "(无 scripts/dtc)"
-          head -5 Makefile
-          # GCC>=10 默认 -fno-common，5.10 的 dtc 在新版 flex/bison 下
-          # lexer/parser 各有一份 YYLTYPE yylloc -> multiple definition
           for f in scripts/dtc/dtc-lexer.l \
                    scripts/dtc/dtc-lexer.lex.c_shipped \
                    scripts/dtc/dtc-lexer.lex.c; do
-            if [ -f "$f" ]; then
-              sed -i '/^YYLTYPE yylloc;$/d' "$f"
-              echo "已修补 $f"
-            fi
+            [ -f "$f" ] && sed -i '/^YYLTYPE yylloc;$/d' "$f" && echo "已修补 $f"
           done
-          # 兜底：host 程序统一 -fcommon
           printf '\nHOSTCFLAGS += -fcommon\nKBUILD_HOSTCFLAGS += -fcommon\nHOST_EXTRACFLAGS += -fcommon\n' >> Makefile
           EOS
           bash -n /tmp/fix_dtc.sh
@@ -90,21 +71,14 @@ jobs:
           for n in .config config config.gz .config.gz; do
             if [ -f "$1/$n" ]; then CFG="$1/$n"; break; fi
           done
-          if [ -z "$CFG" ]; then
-            echo "!! 仓库根目录没找到 .config / config(.gz)"
-            exit 1
-          fi
+          if [ -z "$CFG" ]; then echo "!! 没找到 .config"; exit 1; fi
           echo "使用 config: $CFG"
           if gzip -t "$CFG" 2>/dev/null; then
-            echo "gzip 格式，解压"
             gunzip -c "$CFG" > .config
           else
-            echo "纯文本，直接复制"
             cp "$CFG" .config
           fi
           echo ".config 行数: $(wc -l < .config)"
-          head -8 .config
-          # 这两个由工具链推导，从设备 config 带过来会污染 kbuild
           sed -i '/^CONFIG_CC_IS_CLANG=/d; /^CONFIG_CC_VERSION_TEXT=/d' .config
           scripts/config --disable GCC_PLUGINS 2>/dev/null || true
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
@@ -122,9 +96,9 @@ jobs:
           if make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- V=1 modules_prepare > /tmp/prep.log 2>&1; then
             echo "modules_prepare 一次通过"
           else
-            echo "====== 失败，真实错误如下 ======"
+            echo "====== 失败，真实错误 ======"
             tail -80 /tmp/prep.log
-            echo "====== 把 dtc 换成空壳后重试（dtc 只编设备树，与 .ko 无关）======"
+            echo "====== dtc 换成空壳后重试 ======"
             if [ -d scripts/dtc ]; then
               for f in scripts/dtc/*.c; do
                 [ -e "$f" ] || continue
@@ -133,4 +107,30 @@ jobs:
               done
               printf 'int main(int argc, char **argv){(void)argc;(void)argv;return 0;}\n' > scripts/dtc/dtc.c
             fi
-       
+            make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
+          fi
+          EOS
+          bash -n /tmp/do_prepare.sh
+          bash /tmp/do_prepare.sh "$GITHUB_WORKSPACE"
+
+      - name: MODVERSIONS 处理
+        run: |
+          cat > /tmp/handle_modver.sh <<'EOS'
+          set -x
+          cd "$1/kernel-src"
+          if ! grep -q '^CONFIG_MODVERSIONS=y' .config; then
+            echo "MODVERSIONS 未开启，跳过"
+            exit 0
+          fi
+          if [ -s Module.symvers ]; then echo "已有 Module.symvers"; exit 0; fi
+          echo "MODVERSIONS=y -> 需要 Module.symvers，尝试编 vmlinux"
+          if make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vmlinux > /tmp/vmlinux.log 2>&1; then
+            ls -l Module.symvers && exit 0
+          fi
+          echo "====== vmlinux 失败 ======"
+          tail -40 /tmp/vmlinux.log
+          scripts/config --disable MODVERSIONS
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
+          EOS
+          ba
