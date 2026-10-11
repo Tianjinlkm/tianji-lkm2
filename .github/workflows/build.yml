@@ -26,18 +26,10 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-      - name: Generate arch headers
+      - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare0 -j$(nproc) || true
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- archprepare -j$(nproc) || true
-      - name: Create generated headers
-        run: |
-          cd kernel-src
-          mkdir -p include/generated
-          echo '#define UTS_RELEASE "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284"' > include/generated/utsrelease.h
-          touch include/generated/compile.h
-          touch include/generated/asm-offsets.h
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -k modules_prepare -j$(nproc) || true
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
