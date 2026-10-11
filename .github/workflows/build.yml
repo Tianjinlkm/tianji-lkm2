@@ -9,7 +9,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev device-tree-compiler
 
       - name: Clone pearl kernel source
         run: |
@@ -29,10 +29,16 @@ jobs:
           cd kernel-src
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
+      - name: Skip dtc, use system dtc
+        run: |
+          cd kernel-src
+          sudo ln -sf /usr/bin/dtc scripts/dtc/dtc
+          touch scripts/dtc/dtc
+
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -k modules_prepare -j$(nproc) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
           ls -la include/generated/asm-offsets.h include/generated/autoconf.h include/generated/utsrelease.h
 
       - name: Build TianjiLKM
