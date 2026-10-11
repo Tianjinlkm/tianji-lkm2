@@ -32,7 +32,8 @@ jobs:
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -k modules_prepare -j$(nproc) || true
+          ls -la include/generated/asm-offsets.h include/generated/autoconf.h include/generated/utsrelease.h
 
       - name: Build TianjiLKM
         run: |
