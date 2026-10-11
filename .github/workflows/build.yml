@@ -26,14 +26,27 @@ jobs:
           sed -i 's/CONFIG_STACKPROTECTOR=y/# CONFIG_STACKPROTECTOR is not set/' .config
           sed -i 's/CONFIG_STACKPROTECTOR_STRONG=y/# CONFIG_STACKPROTECTOR_STRONG is not set/' .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-      - name: Manually create ALL missing generated headers
+      - name: Auto-create ALL generated headers
         run: |
           cd kernel-src
-          mkdir -p arch/arm64/include/generated/uapi/asm
-          mkdir -p arch/arm64/include/generated/asm
-          mkdir -p include/generated
           
-          # 1. Create full cpucaps.h with ALL ARM64 cpu capability macros
+          # 1. Create uapi/asm directory, symlink everything from asm-generic
+          mkdir -p arch/arm64/include/generated/uapi/asm
+          for f in include/uapi/asm-generic/*.h; do
+            name=$(basename "$f")
+            ln -sf "../../../../$f" "arch/arm64/include/generated/uapi/asm/$name"
+          done
+          
+          # 2. Also create in arch/arm64/include/uapi/asm/ just in case
+          mkdir -p arch/arm64/include/uapi/asm
+          for f in include/uapi/asm-generic/*.h; do
+            name=$(basename "$f")
+            if [ ! -f "arch/arm64/include/uapi/asm/$name" ]; then
+              ln -sf "../../../../$f" "arch/arm64/include/uapi/asm/$name"
+            fi
+          done
+          
+          # 3. Create cpucaps.h with all macros
           cat > arch/arm64/include/generated/cpucaps.h << 'EOF'
           #ifndef __ASM_CPUCAPS_H
           #define __ASM_CPUCAPS_H
@@ -76,28 +89,16 @@ jobs:
           #endif
           EOF
           
-          # Put cpucaps.h in all possible locations
+          # Put cpucaps.h in all locations
           cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/generated/asm/cpucaps.h
           cp arch/arm64/include/generated/cpucaps.h arch/arm64/include/asm/cpucaps.h
           
-          # 2. Create bounds.h (empty, just needs to exist)
+          # 4. Create other common generated headers
           touch include/generated/bounds.h
-          touch arch/arm64/include/generated/bounds.h
-          
-          # 3. Create other common generated headers
           touch include/generated/utsrelease.h
           touch include/generated/compile.h
           touch include/generated/autoksyms.h
           touch arch/arm64/include/generated/asm-offsets.h
-          touch arch/arm64/include/generated/asm/asm-offsets.h
-          
-          # 4. Create uapi asm headers
-          echo '#include <asm-generic/errno.h>' > arch/arm64/include/generated/uapi/asm/errno.h
-          echo '#include <asm-generic/errno-base.h>' > arch/arm64/include/generated/uapi/asm/errno-base.h
-          echo '#include <asm-generic/ioctl.h>' > arch/arm64/include/generated/uapi/asm/ioctl.h
-          echo '#include <asm-generic/ioctls.h>' > arch/arm64/include/generated/uapi/asm/ioctls.h
-          echo '#include <asm-generic/termbits.h>' > arch/arm64/include/generated/uapi/asm/termbits.h
-          echo '#include <asm-generic/errno.h>' > arch/arm64/include/generated/uapi/asm/errno.h
       - name: Build module
         run: make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-src M=$(pwd) modules
       - name: Upload ko
