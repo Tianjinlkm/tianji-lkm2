@@ -32,8 +32,8 @@ jobs:
       - name: Skip dtc, use system dtc
         run: |
           cd kernel-src
+          sudo rm -f scripts/dtc/dtc
           sudo ln -sf /usr/bin/dtc scripts/dtc/dtc
-          touch scripts/dtc/dtc
 
       - name: Prepare kernel build env
         run: |
