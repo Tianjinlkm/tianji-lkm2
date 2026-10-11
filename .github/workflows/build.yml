@@ -8,6 +8,19 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    # ── 可调参数 ──────────────────────────────────────────────
+    # KERNEL_BRANCH : 内核源码分支
+    #   pearl-s-oss  = Redmi Note 12T Pro (pearl) 官方唯一分支，5.10.136
+    #   zircon-t-oss = Redmi Note 13 Pro+，5.15.94（与本机不符，勿用）
+    # TARGET_RELEASE: 手机 uname -r 的值，用于强制对齐 vermagic
+    # ──────────────────────────────────────────────────────────
+    env:
+      KERNEL_BRANCH: pearl-s-oss
+      # 手机 uname -r 的完整值，一个字符都不能差
+      TARGET_RELEASE: 5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284
+      # vermagic 末尾的构建时间，同样要一致，否则 insmod 报 version magic
+      KBUILD_BUILD_TIMESTAMP: "Tue Oct 21 03:03:12 UTC 2025"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,11 +33,16 @@ jobs:
             libssl-dev libelf-dev \
             python3 python-is-python3 cpio kmod xz-utils
           aarch64-linux-gnu-gcc --version | head -1
+          flex --version
+          bison --version | head -1
 
       - name: Clone kernel source
         run: |
-          git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git -b zircon-t-oss kernel-src
+          git clone --depth 1 https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git \
+                    -b "$KERNEL_BRANCH" kernel-src
           cd kernel-src && git log --oneline -1
+          echo "====== 源码版本 ======"
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) ' Makefile
 
       - name: Fix missing Kconfig files
         run: |
@@ -46,17 +64,30 @@ jobs:
           bash -n /tmp/fix_kconfig.sh
           bash /tmp/fix_kconfig.sh "$GITHUB_WORKSPACE"
 
-      - name: dtc 修复
+      # 方案A：修补 dtc 源码，让它能正常编译出来（首选，不动构建结构）
+      - name: dtc 修复（方案A：修补源码）
         run: |
           cat > /tmp/fix_dtc.sh <<'EOS'
           set -x
           cd "$1/kernel-src"
+          echo "====== scripts/dtc/Makefile ======"
+          head -30 scripts/dtc/Makefile 2>/dev/null || echo "(无 scripts/dtc/Makefile)"
+          # GCC>=10 默认 -fno-common -> multiple definition of 'yylloc'
+          # 逐个文件修补，不存在就跳过；整段加 || true 避免 && 链返回非零
           for f in scripts/dtc/dtc-lexer.l \
                    scripts/dtc/dtc-lexer.lex.c_shipped \
                    scripts/dtc/dtc-lexer.lex.c; do
-            [ -f "$f" ] && sed -i '/^YYLTYPE yylloc;$/d' "$f" && echo "已修补 $f"
-          done
+            if [ -f "$f" ]; then
+              sed -i '/^YYLTYPE yylloc;$/d' "$f"
+              echo "已修补 $f"
+            else
+              echo "跳过(不存在) $f"
+            fi
+          done || true
+          # 兜底：host 程序统一 -fcommon（KBUILD_HOSTCFLAGS 与 HOST_EXTRACFLAGS
+          # 是 kbuild 实际生效的两个，HOSTCFLAGS 一并对旧版本兼容）
           printf '\nHOSTCFLAGS += -fcommon\nKBUILD_HOSTCFLAGS += -fcommon\nHOST_EXTRACFLAGS += -fcommon\n' >> Makefile
+          tail -5 Makefile
           EOS
           bash -n /tmp/fix_dtc.sh
           bash /tmp/fix_dtc.sh "$GITHUB_WORKSPACE"
@@ -66,7 +97,6 @@ jobs:
           cat > /tmp/prep_config.sh <<'EOS'
           set -x
           cd "$1/kernel-src"
-          ls -la "$1"
           CFG=""
           for n in .config config config.gz .config.gz; do
             if [ -f "$1/$n" ]; then CFG="$1/$n"; break; fi
@@ -79,58 +109,21 @@ jobs:
             cp "$CFG" .config
           fi
           echo ".config 行数: $(wc -l < .config)"
-          sed -i '/^CONFIG_CC_IS_CLANG=/d; /^CONFIG_CC_VERSION_TEXT=/d' .config
-          scripts/config --disable GCC_PLUGINS 2>/dev/null || true
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          echo "--- 关键开关 ---"
-          grep -E 'CONFIG_MODVERSIONS=|CONFIG_LOCALVERSION=|CONFIG_SMP=|CONFIG_PREEMPT=|CONFIG_MODULE_UNLOAD=' .config || true
-          EOS
-          bash -n /tmp/prep_config.sh
-          bash /tmp/prep_config.sh "$GITHUB_WORKSPACE"
 
-      - name: modules_prepare（dtc 终极兜底）
-        run: |
-          cat > /tmp/do_prepare.sh <<'EOS'
-          set -x
-          cd "$1/kernel-src"
-          if make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- V=1 modules_prepare > /tmp/prep.log 2>&1; then
-            echo "modules_prepare 一次通过"
-          else
-            echo "====== 失败，真实错误 ======"
-            tail -80 /tmp/prep.log
-            echo "====== dtc 换成空壳后重试 ======"
-            if [ -d scripts/dtc ]; then
-              for f in scripts/dtc/*.c; do
-                [ -e "$f" ] || continue
-                [ "$(basename "$f")" = "dtc.c" ] && continue
-                printf '/* stub */\n' > "$f"
-              done
-              printf 'int main(int argc, char **argv){(void)argc;(void)argv;return 0;}\n' > scripts/dtc/dtc.c
-            fi
-            make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          fi
-          EOS
-          bash -n /tmp/do_prepare.sh
-          bash /tmp/do_prepare.sh "$GITHUB_WORKSPACE"
-
-      - name: MODVERSIONS 处理
-        run: |
-          cat > /tmp/handle_modver.sh <<'EOS'
-          set -x
-          cd "$1/kernel-src"
-          if ! grep -q '^CONFIG_MODVERSIONS=y' .config; then
-            echo "MODVERSIONS 未开启，跳过"
-            exit 0
-          fi
-          if [ -s Module.symvers ]; then echo "已有 Module.symvers"; exit 0; fi
-          echo "MODVERSIONS=y -> 需要 Module.symvers，尝试编 vmlinux"
-          if make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vmlinux > /tmp/vmlinux.log 2>&1; then
-            ls -l Module.symvers && exit 0
-          fi
-          echo "====== vmlinux 失败 ======"
-          tail -40 /tmp/vmlinux.log
-          scripts/config --disable MODVERSIONS
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          EOS
-          ba
+          # 0) 版本对齐：把源码版本强行改成 TARGET_RELEASE，否则 vermagic
+          #    对不上，insmod 会报 "version magic ... should be ..."。
+          #    例：pearl-s-oss 源码 5.10.136，手机 5.10.236-android12。
+          #    只改 SUBLEVEL / LOCALVERSION 数字，不动任何结构体。
+          echo "====== 版本对齐 ======"
+          echo "源码: $(sed -n 's/^VERSION *= *//p' Makefile | head -1).$(sed -n 's/^PATCHLEVEL *= *//p' Makefile | head -1).$(sed -n 's/^SUBLEVEL *= *//p' Makefile | head -1)$(sed -n 's/^EXTRAVERSION *= *//p' Makefile | head -1)"
+          echo "目标: $2"
+          TGT="$2"
+          # 目标形如 5.10.236-android12：数字部分是 x.y.z，其余全是 LOCALVERSION
+          NUM=$(echo "$TGT" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          SUF=$(echo "$TGT" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//')
+          T_SUB=$(echo "$NUM" | cut -d. -f3)
+          T_EXT=""
+          echo "解析 -> 数字段=$NUM 后缀=$SUF SUBLEVEL=$T_SUB"
+          sed -i -E "s/^SUBLEVEL *= *[0-9]+/SUBLEVEL = $T_SUB/" Makefile
+          sed -i -E "s/^EXTRAVERSION *=.*/EXTRAVERSION =/" Makefile
+          # LOCALVERSION 用 config 设，保证 
