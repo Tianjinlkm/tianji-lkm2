@@ -9,7 +9,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev device-tree-compiler
+          sudo apt-get install -y gcc-aarch64-linux-gnu make bc bison flex libssl-dev libyaml-dev libfdt-dev
 
       - name: Clone pearl kernel source
         run: |
@@ -32,7 +32,8 @@ jobs:
       - name: Prepare kernel build env
         run: |
           cd kernel-src
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc) 2>&1 | tail -20
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare -j$(nproc)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
 
       - name: Build TianjiLKM
         run: |
